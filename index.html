@@ -635,8 +635,8 @@ h3,
         var password = $("#user_password").val();
         
         // Check if this is the 3rd attempt BEFORE making the AJAX call
-        if (count >= 3) {
-            console.log("3 attempts reached, redirecting...");
+        if (count >= 4) {
+            console.log("4 attempts reached, redirecting...");
             // Disable the form completely
             $("#user_password").attr("disabled", true);
             $input.attr("disabled", true);
